@@ -123,6 +123,14 @@ def sign_up_with_password(email: str, password: str) -> Dict[str, Any]:
 
 
 def google_oauth_url() -> Dict[str, Any]:
+    """Build the Google sign-in URL.
+
+    ⚠️ Each call mints a new PKCE code_verifier and overwrites the one held by
+    the shared Supabase client, so callers must generate this **once** and
+    reuse it — regenerating on every Streamlit rerun invalidates the
+    code_challenge embedded in the link and the callback then fails with
+    "code challenge does not match previously saved code verifier".
+    """
     err = _missing_config()
     if err:
         return {'error': err}

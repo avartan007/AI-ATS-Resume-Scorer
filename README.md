@@ -317,6 +317,16 @@ fixed `8000` will make the service fail its health check. Add the same
 `GROQ_*` / `SUPABASE_*` values as environment variables in the service's
 **Environment** tab; the backend reads them straight from `os.getenv`.
 
+> Don't append `python -m spacy download` to the build command. It takes a
+> required model argument, so the bare form fails the build with
+> `Missing argument 'model'` — and the model is already pinned as a wheel in
+> `requirements.txt`.
+>
+> File-type detection: Render has no `libmagic`, so `python-magic` can't sniff
+> uploads there. The code falls back to the filename extension automatically,
+> which is fine for normal use. To get real content sniffing back, add a
+> `Dockerfile` (or a build step) that installs `libmagic1`.
+
 Then tell the frontend to stop spawning its own backend:
 
 ```toml

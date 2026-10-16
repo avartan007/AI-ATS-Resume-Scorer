@@ -1,6 +1,15 @@
 import io
-import magic
+from pathlib import Path
 from typing import Tuple, Optional
+
+try:
+    # python-magic needs the libmagic C library, which isn't a pip package.
+    # Streamlit Cloud installs it via packages.txt; other hosts (e.g. Render)
+    # often don't have it. Import defensively and fall back to the filename
+    # extension so uploads still work instead of failing on every request.
+    import magic
+except ImportError:  # pragma: no cover
+    magic = None
 
 import pdfplumber
 from docx import Document
@@ -24,6 +33,33 @@ from backend.core.config import (
 class FileValidationError(Exception):
     pass
 
+
+# Reverse of SUPPORTED_MIME_TYPES, for hosts without libmagic.
+_EXTENSION_MIME_TYPES = {
+    '.pdf':  'application/pdf',
+    '.doc':  'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+
+
+def _sniff_mime_type(file_data: bytes, filename: str) -> str:
+    """Detect the MIME type, preferring real content sniffing.
+
+    libmagic inspects the bytes, which is what we want — a `.pdf` filename
+    proves nothing. But the C library isn't installable from pip and is absent
+    on some hosts, so fall back to the extension rather than rejecting every
+    upload.
+    """
+    if magic is not None:
+        try:
+            return magic.from_buffer(file_data, mime=True)
+        except Exception as exc:
+            log_warning(f'libmagic unavailable ({exc}); falling back to extension')
+
+    ext = Path(filename or '').suffix.lower()
+    return _EXTENSION_MIME_TYPES.get(ext, 'application/octet-stream')
+
+
 def validate_file(file_data:bytes, filename:str)->Tuple[bool, str, Optional[str]]:
     file_size_bytes = len(file_data)
     if file_size_bytes > MAX_FILE_SIZE_BYTES:
@@ -37,7 +73,7 @@ def validate_file(file_data:bytes, filename:str)->Tuple[bool, str, Optional[str]
         return False, 'Uploaded file is empty — please check the file and try again.', None
     
     try:
-        mime_type=magic.from_buffer(file_data, mime=True)
+        mime_type = _sniff_mime_type(file_data, filename)
     except Exception as e:
         return False, f"error deteminin the file type : {e}", None
     
