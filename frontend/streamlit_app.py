@@ -339,11 +339,17 @@ def _render_backend_down(waited: float | None) -> None:
         st.error(
             f"**No backend is answering at** `{BACKEND_URL}`.\n\n"
             "This app is pointed at an *external* backend — a `[backend] url` "
-            "secret or a `BACKEND_URL` env var — rather than the one bundled "
-            "with it, and that server is not responding. This is usually a "
-            "Render service that is still deploying or has crashed; deploy it "
-            "(see the Render section of the README), or remove the `[backend]` "
-            "secret so the app runs its own backend inside this container."
+            "secret or a `BACKEND_URL` env var — so nothing runs inside this "
+            "container and the app depends entirely on that server.\n\n"
+            "If it is on Render's free tier it spins down when idle. Allow a "
+            "couple of minutes for the deploy to finish and for "
+            "**`Application startup complete.`** to appear in its logs — that "
+            "line is the AI models finishing their load — then reload this "
+            "page. Reloading *is* the retry; the wait runs only once per "
+            "session.\n\n"
+            "To drop the dependency entirely, delete the `[backend]` secret and "
+            "the app starts its own backend in this container instead (see "
+            "'Splitting the backend out' in the README)."
         )
         st.stop()
     seconds = f" after {int(waited)}s" if waited else ""
