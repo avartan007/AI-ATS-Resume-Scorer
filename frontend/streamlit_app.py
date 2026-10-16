@@ -1,10 +1,111 @@
 import streamlit as st
+import os
+import socket
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
 
 # Put the repo root on sys.path so `from frontend.views import ...` resolves
 # regardless of the directory streamlit was launched from.
-sys.path.insert(0, str(Path(__file__).parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Backend bootstrap
+# ---------------------------------------------------------------------------
+# Streamlit Community Cloud only runs this one process, so the FastAPI backend
+# has to be started from here. On Streamlit Cloud we therefore spawn uvicorn
+# ourselves and talk to it over 127.0.0.1.
+#
+# Locally, if you already started `uvicorn backend.main:app --port 8000`, the
+# port is occupied, this detects it and does nothing extra.
+DEFAULT_BACKEND_PORT = 8000
+_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _resolve_backend():
+    """Return (base_url, local_port).
+
+    ``local_port`` is None when the backend is hosted elsewhere, in which case
+    this app must not try to spawn its own uvicorn child.
+    """
+    if os.getenv("BACKEND_URL"):
+        url = os.getenv("BACKEND_URL")
+    else:
+        try:
+            url = st.secrets["backend"]["url"]
+        except (KeyError, FileNotFoundError):
+            url = None
+
+    if not url:
+        port = int(os.getenv("BACKEND_PORT", DEFAULT_BACKEND_PORT))
+        return f"http://127.0.0.1:{port}", port
+
+    parsed = urlparse(url)
+    if parsed.hostname in _LOCAL_HOSTS and parsed.port:
+        return url, parsed.port
+    return url, None
+
+
+BACKEND_URL, BACKEND_PORT = _resolve_backend()
+
+
+def _port_is_taken(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _backend_ready() -> bool:
+    try:
+        return requests.get(f"{BACKEND_URL.rstrip('/')}/api/v1/health", timeout=3).ok
+    except Exception:
+        return False
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _ensure_backend() -> None:
+    """Start the FastAPI backend in-process if nothing is listening yet.
+
+    A lock file holding the child's PID stops Streamlit re-runs from spawning
+    duplicate uvicorn processes while the first one is still loading its models,
+    while still allowing a respawn if that child ever dies.
+    """
+    if BACKEND_PORT is None or _port_is_taken(BACKEND_PORT):
+        return
+
+    lock = os.path.join(tempfile.gettempdir(), f"ats-backend-{BACKEND_PORT}.lock")
+    if os.path.exists(lock):
+        try:
+            if _pid_alive(int(open(lock).read().strip())):
+                return
+        except (OSError, ValueError):
+            pass
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "backend.main:app",
+         "--host", "127.0.0.1", "--port", str(BACKEND_PORT)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    with open(lock, "w") as fh:
+        fh.write(str(proc.pid))
+
+
+_ensure_backend()
 
 # Configure page
 st.set_page_config(
@@ -154,6 +255,21 @@ with st.sidebar:
                 url=oauth["url"],
                 use_container_width=True,
             )
+
+# Wait for the backend if it was just spawned (cold start loads AI models,
+# which takes ~60s). On Streamlit Cloud this is the only process, so the
+# backend is the uvicorn child we kicked off above.
+if not _backend_ready():
+    with st.spinner(
+        "Starting the scoring engine — first launch takes ~60s while the AI models load…"
+    ):
+        for _ in range(90):
+            if _backend_ready():
+                break
+            time.sleep(2)
+        else:
+            st.error("The backend failed to start. Check the Streamlit Cloud logs.")
+            st.stop()
 
 # Main content area - render based on current view
 if st.session_state.current_view == 'landing':

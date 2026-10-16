@@ -162,15 +162,19 @@ source .venv/bin/activate
 uvicorn backend.main:app --reload --port 8000
 ```
 
-**Frontend** (terminal 2, must run from `frontend/` so its `.streamlit/config.toml` applies):
+**Frontend** (terminal 2):
 
 ```bash
 source .venv/bin/activate
-cd frontend
-streamlit run streamlit_app.py
+streamlit run frontend/streamlit_app.py
 ```
 
 Then open **http://localhost:8501** and sign in — analysis requires an account.
+
+> `streamlit_app.py` boots the backend itself if nothing is listening on port
+> 8000, so running a separate `uvicorn` is optional. Starting it yourself
+> (terminal 1) gives you the auto-reload and the logs, which is nicer for
+> development.
 
 First startup takes ~15s while models load. Verify with:
 
@@ -178,6 +182,94 @@ First startup takes ~15s while models load. Verify with:
 curl http://localhost:8000/api/v1/health
 # {"status":"healthy","nlp_loaded":true,"embedder_loaded":true}
 ```
+
+---
+
+## Deploying to Streamlit Community Cloud
+
+The app is a **single deployable unit**: `streamlit_app.py` spawns the FastAPI
+backend as a child process, so Streamlit Cloud only needs this one repo.
+
+### 1. Are the ML models committed?
+
+No — and that's intentional. Weights are not stored in git. Instead:
+
+- The default embedder `all-MiniLM-L6-v2` is a **public HuggingFace model**.
+  It is downloaded automatically into the host's HF cache on first startup
+  (~90 MB). Nothing to commit, nothing to configure.
+- spaCy's `en_core_web_md` (~40 MB) is pinned as a wheel URL in
+  `requirements.txt`, so `pip install -r requirements.txt` fetches it too.
+- If you later swap in **your own trained model**, do **not** commit it either.
+  Upload it to HuggingFace Hub (public or private) and point the app at it:
+  ```env
+  SENTENCE_TRANSFORMER_MODEL=<your-username>/<your-model>
+  HF_TOKEN=hf_xxx          # only needed for a private repo
+  ```
+  Weights in git would bloat the clone, slow deploys, and hit GitHub's
+  100 MB file limit.
+
+### 2. Streamlit Cloud settings
+
+1. Push the repo to GitHub, then go to <https://share.streamlit.io>
+2. **New app** → select the repo / branch / main file path:
+   ```
+   frontend/streamlit_app.py
+   ```
+3. Under **Advanced settings** → *Secrets*, paste the following. This becomes
+   `.streamlit/secrets.toml`, which is git-ignored.
+
+   Note the two sections — Streamlit Cloud runs **both** halves of the app in
+   one container, so one file has to satisfy two different readers:
+
+   - **Top-level keys** are exported as *environment variables*, which is how
+     the spawned backend gets its config. They must come first (TOML puts
+     everything after a `[table]` header inside that table).
+   - **Tables** are read by the frontend through `st.secrets`.
+
+   ```toml
+   # ── backend ── read via os.getenv() in the spawned uvicorn ─────────────
+   GROQ_API_KEY = "gsk_..."
+   GROQ_MODEL = "openai/gpt-oss-120b"
+   SUPABASE_URL = "https://<your-project-ref>.supabase.co"
+   SUPABASE_KEY = "<service_role key>"
+
+   # ── frontend ── read via st.secrets ────────────────────────────────────
+   [supabase]
+   SUPABASE_URL = "https://<your-project-ref>.supabase.co"
+   SUPABASE_ANON_KEY = "<anon key>"
+
+   [google_oauth]
+   redirect_uri = "https://<your-app>.streamlit.app"
+   ```
+
+   > Use the **`service_role`** key (not the anon key) for `SUPABASE_KEY` —
+   > the backend needs it to write history past RLS. The anon key stays
+   > frontend-only.
+
+4. Deploy. `packages.txt` installs `libmagic1` automatically for
+   PDF/DOCX type detection.
+
+Add the deployed URL to Supabase → **Authentication → Redirect URLs**:
+
+```
+https://<your-app>.streamlit.app
+```
+
+> First load takes ~60 s while the models download and warm up; the UI shows a
+> progress spinner, then loads normally.
+
+### 3. Splitting the backend out later
+
+If you outgrow the single-process setup (cold starts, memory), host the API
+separately (Render / Railway / Fly.io) and just point the frontend at it:
+
+```toml
+# .streamlit/secrets.toml on Streamlit Cloud
+[backend]
+url = "https://your-api.example.com"
+```
+
+`backend.url` disables the in-process backend entirely.
 
 ---
 

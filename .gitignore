@@ -1,6 +1,7 @@
 # Secrets
 .env
-frontend/.streamlit/secrets.toml
+.env.bak
+.streamlit/secrets.toml
 
 # Local ML models (BERT / sentence-transformers checkpoints)
 models/
