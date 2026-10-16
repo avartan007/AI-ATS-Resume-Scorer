@@ -2,6 +2,7 @@ import os
 import logging
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 import streamlit as st
 from supabase import Client, create_client
 
@@ -29,11 +30,41 @@ def _secret(key: str, section: str = 'supabase') -> str:
 SUPABASE_URL = _secret('SUPABASE_URL')
 SUPABASE_ANON_KEY = _secret('SUPABASE_ANON_KEY')
 
-OAUTH_REDIRECT_URL = (
-    os.getenv('AUTH_REDIRECT_URL')
-    or _secret('redirect_uri', 'google_oauth')
-    or 'http://localhost:8501'
-)
+def _is_local_url(url: str) -> bool:
+    return (urlparse(url).hostname or '') in ('localhost', '127.0.0.1', '::1', '')
+
+
+def _detected_app_url() -> str:
+    """The URL the user is actually on, or '' when it can't be determined."""
+    try:
+        return (st.context.url or '').rstrip('/')
+    except Exception:
+        return ''
+
+
+def _oauth_redirect_url() -> str:
+    """Where the OAuth provider should send the user back.
+
+    A hardcoded localhost fallback silently breaks deployed apps: the provider
+    bounces the user to their own machine, so the code exchange happens against
+    the wrong app and sign-in never completes. So prefer the URL the user is
+    actually on, and only honour a configured localhost value while the app is
+    itself being served locally.
+
+    Evaluated per call rather than at import so it reflects the live session.
+    """
+    detected = _detected_app_url()
+    configured = (
+        os.getenv('AUTH_REDIRECT_URL')
+        or _secret('redirect_uri', 'google_oauth')
+        or ''
+    ).rstrip('/')
+
+    stale_localhost = _is_local_url(configured) and not _is_local_url(detected)
+    if configured and not stale_localhost:
+        return configured
+
+    return detected or configured or 'http://localhost:8501'
 
 
 def _missing_config() -> str | None:
@@ -98,7 +129,7 @@ def google_oauth_url() -> Dict[str, Any]:
     try:
         resp = get_client().auth.sign_in_with_oauth({
             'provider': 'google',
-            'options': {'redirect_to': OAUTH_REDIRECT_URL},
+            'options': {'redirect_to': _oauth_redirect_url()},
         })
         return {'url': resp.url}
     except Exception as exc:
@@ -118,7 +149,7 @@ def exchange_code_for_session(auth_code: str) -> Dict[str, Any]:
         resp = client.auth.exchange_code_for_session({
             'auth_code': auth_code,
             'code_verifier': code_verifier,
-            'redirect_to': OAUTH_REDIRECT_URL,
+            'redirect_to': _oauth_redirect_url(),
         })
         if not resp.session or not resp.user:
             return {'error': 'OAuth exchange returned no session'}

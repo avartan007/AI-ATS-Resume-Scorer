@@ -113,7 +113,7 @@ SUPABASE_JWT_SECRET=<JWT secret>         # optional — used only for HS256 toke
 GROQ_API_KEY=<your groq key>
 GROQ_MODEL=openai/gpt-oss-120b           # optional override
 SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
-AUTH_REDIRECT_URL=http://localhost:8501  # Google OAuth callback
+AUTH_REDIRECT_URL=http://localhost:8501  # local dev only — omit when deployed
 ```
 
 > ⚠️ `SUPABASE_URL` must be the **`https://<ref>.supabase.co`** REST URL, **not** the `postgresql://` connection string.
@@ -144,12 +144,36 @@ create policy "service role full access"
 
 #### Google OAuth
 
-In Supabase → **Authentication → Providers → Google**, enable it and add to **Redirect URLs**:
+In Supabase → **Authentication → Providers → Google**, enable it and add your
+Google client ID/secret.
+
+Then open **Authentication → URL Configuration**. Both fields matter, and
+getting them wrong is the usual reason a deployed app sends users back to
+`localhost`:
+
+| Field | Value |
+| --- | --- |
+| **Site URL** | your frontend URL — `https://<your-app>.streamlit.app` (or `http://localhost:8501` for local dev) |
+| **Redirect URLs** | every URL you sign in from, one per line |
 
 ```
 http://localhost:8501
-https://<your-deployed-frontend-url>
+https://<your-app>.streamlit.app
 ```
+
+Two independent things have to line up, and it's easy to fix only one:
+
+1. **The app must ask for the right `redirect_to`.** It resolves that itself:
+   `AUTH_REDIRECT_URL` → `[google_oauth] redirect_uri` → *the URL the user is
+   actually on*. So a deployed app needs no configuration here, and a stale
+   `http://localhost:8501` from your local `.env` is ignored in the cloud.
+2. **Supabase must allow that URL.** If the requested `redirect_to` isn't in
+   **Redirect URLs**, Supabase silently substitutes the **Site URL** — so if
+   the Site URL is still `http://localhost:8501`, that's where the user lands
+   no matter what the app asked for.
+
+Add the deployed URL to **both** the Google Cloud console's authorized
+redirect URI and Supabase's Redirect URLs.
 
 ---
 
@@ -242,6 +266,10 @@ No — and that's intentional. Weights are not stored in git. Instead:
    redirect_uri = "https://<your-app>.streamlit.app"
    ```
 
+   > The `[google_oauth]` section is optional: with it omitted the app uses the
+   > URL the user is actually on. Set it only if you serve the app from behind
+   > a proxy whose public URL differs from what the browser reports.
+
    > Use the **`service_role`** key (not the anon key) for `SUPABASE_KEY` —
    > the backend needs it to write history past RLS. The anon key stays
    > frontend-only.
@@ -249,11 +277,15 @@ No — and that's intentional. Weights are not stored in git. Instead:
 4. Deploy. `packages.txt` installs `libmagic1` automatically for
    PDF/DOCX type detection.
 
-Add the deployed URL to Supabase → **Authentication → Redirect URLs**:
+Add the deployed URL to Supabase → **Authentication → URL Configuration** —
+both the **Site URL** and the **Redirect URLs** list:
 
 ```
 https://<your-app>.streamlit.app
 ```
+
+If you only set one of them, Google sign-in on the deployed app drops the user
+back to `localhost` — see [Google OAuth](#google-oauth) above.
 
 > The first load takes a couple of minutes: the embedding model is fetched
 > from Hugging Face and the NLP pipeline is loaded, with a spinner shown the
@@ -289,8 +321,8 @@ Then tell the frontend to stop spawning its own backend:
 url = "https://your-api.onrender.com"
 ```
 
-`backend.url` disables the in-process backend entirely. Add that same Render
-URL to Supabase → Authentication → Redirect URLs if you use OAuth.
+`backend.url` disables the in-process backend entirely — the backend URL never
+needs to be in Supabase's Redirect URLs, since OAuth returns to the frontend.
 
 > Render's free tier also sleeps when idle, so the first request after a quiet
 > spell takes ~30 s while the instance restarts and reloads its models.
