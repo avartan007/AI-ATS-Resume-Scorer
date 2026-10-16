@@ -327,10 +327,43 @@ with st.sidebar:
                 use_container_width=True,
             )
 
+def _render_backend_down(waited: float | None) -> None:
+    """Explain why the scoring engine is unreachable, then stop the script.
+
+    Split out from the wait loop so a session that has already burned the full
+    timeout can show this on the very next rerun instead of re-blocking for
+    another six minutes every time the user touches a widget.
+    """
+    if BACKEND_PORT is None:
+        # Nothing was spawned: an external backend is configured.
+        st.error(
+            f"**No backend is answering at** `{BACKEND_URL}`.\n\n"
+            "This app is pointed at an *external* backend — a `[backend] url` "
+            "secret or a `BACKEND_URL` env var — rather than the one bundled "
+            "with it, and that server is not responding. This is usually a "
+            "Render service that is still deploying or has crashed; deploy it "
+            "(see the Render section of the README), or remove the `[backend]` "
+            "secret so the app runs its own backend inside this container."
+        )
+        st.stop()
+    seconds = f" after {int(waited)}s" if waited else ""
+    st.error(
+        f"The backend process never became healthy{seconds}. Its last lines "
+        "are below. On the free-tier container this is usually out-of-memory — "
+        "a `Killed` line while loading the AI models — see the 'Splitting the "
+        "backend out' section of the README. Paste the log below when "
+        "reporting it."
+    )
+    st.code(_backend_log_tail(), language="log")
+    st.stop()
+
+
 # Wait for the backend if it was just spawned (cold start downloads the
 # embedding model and loads the NLP pipeline). On Streamlit Cloud this is the
 # only process, so the backend is the uvicorn child we kicked off above.
 if not _backend_ready():
+    if st.session_state.get("_backend_wait_exhausted"):
+        _render_backend_down(None)
     with st.spinner(
         "Starting the scoring engine — the first launch downloads the AI models, "
         "which takes a couple of minutes…"
@@ -342,29 +375,9 @@ if not _backend_ready():
                 break
             waited = time.time() - started
             if waited >= BACKEND_STARTUP_TIMEOUT:
+                st.session_state["_backend_wait_exhausted"] = True
                 status.empty()
-                if BACKEND_PORT is None:
-                    # Nothing was spawned: an external backend is configured.
-                    st.error(
-                        f"**No backend is answering at** `{BACKEND_URL}`.\n\n"
-                        "This app is pointed at an *external* backend — a `[backend] "
-                        "url` secret or a `BACKEND_URL` env var — rather than the one "
-                        "bundled with it, and that server is not responding. This is "
-                        "usually a Render service that is still deploying or has "
-                        "crashed; deploy it (see the Render section of the README), "
-                        "or remove the `[backend]` secret so the app runs its own "
-                        "backend inside this container."
-                    )
-                    st.stop()
-                st.error(
-                    f"The backend process never became healthy after {int(waited)}s. "
-                    "Its last lines are below. On the free-tier container this is "
-                    "usually out-of-memory — a `Killed` line while loading the AI "
-                    "models — see the 'Splitting the backend out' section of the "
-                    "README. Paste the log below when reporting it."
-                )
-                st.code(_backend_log_tail(), language="log")
-                st.stop()
+                _render_backend_down(waited)
             status.caption(f"Warming up… {int(waited)}s elapsed")
             time.sleep(2)
         status.empty()
