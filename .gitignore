@@ -4,7 +4,13 @@
 .streamlit/secrets.toml
 
 # Local ML models (BERT / sentence-transformers checkpoints)
-models/
+# Anchored to the repo root on purpose: a bare `models/` also matched
+# backend/models/ — application code (schemas.py) that has to ship, and whose
+# absence makes `from backend.models.schemas import ...` fail with
+# ModuleNotFoundError on any fresh checkout. The big checkpoints under
+# backend/models/ are still caught by *.bin / *.safetensors / *.pt below.
+/models/*
+!/models/README.md
 *.bin
 *.safetensors
 *.pt
