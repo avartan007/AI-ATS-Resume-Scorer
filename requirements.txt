@@ -1,0 +1,32 @@
+# ---- Backend (FastAPI) ----
+fastapi
+uvicorn[standard]
+jinja2
+pydantic
+python-dotenv
+python-multipart
+
+# ---- NLP / ML ----
+numpy
+spacy
+sentence-transformers
+torch
+transformers
+
+# ---- File parsing ----
+PyPDF2
+pdfplumber
+python-docx
+python-magic
+
+# ---- Misc backend ----
+rapidfuzz
+httpx
+groq
+PyJWT
+weasyprint
+
+# ---- Frontend (Streamlit) ----
+streamlit
+requests
+supabase

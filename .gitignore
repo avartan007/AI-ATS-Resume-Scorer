@@ -1,0 +1,31 @@
+# Secrets
+.env
+frontend/.streamlit/secrets.toml
+
+# Local ML models (BERT / sentence-transformers checkpoints)
+models/
+*.bin
+*.safetensors
+*.pt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Logs
+logs/
+backend/logs/
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Backups
+*.bak
