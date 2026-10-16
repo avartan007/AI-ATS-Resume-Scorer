@@ -172,8 +172,12 @@ Two independent things have to line up, and it's easy to fix only one:
    the Site URL is still `http://localhost:8501`, that's where the user lands
    no matter what the app asked for.
 
-Add the deployed URL to **both** the Google Cloud console's authorized
-redirect URI and Supabase's Redirect URLs.
+Add the deployed URL to **both** the Site URL field and the Redirect URLs list.
+
+In the Google Cloud console, the authorized redirect URI stays
+`https://<your-project-ref>.supabase.co/auth/v1/callback` — Supabase is the
+OAuth client, so Google only ever redirects there. The app URL belongs in
+Supabase's settings alone.
 
 ---
 
