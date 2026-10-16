@@ -16,6 +16,36 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 
+def _import_frontend(module_name: str):
+    """Import one of our own submodules, surviving the watcher's eviction race.
+
+    Streamlit's source-file watcher evicts modules from the *process-global*
+    ``sys.modules``. It defers the removal to the start of a script run so the
+    watcher thread can't mutate ``sys.modules`` mid-import — but each browser
+    session runs that flush on its own thread, so with two sessions one can pop
+    a module while the other is importing it. importlib then dies with a bare
+    ``KeyError: 'frontend'`` from ``sys.modules.pop(spec.name)``.
+
+    ``server.fileWatcherType = "none"`` (see .streamlit/config.toml) prevents it
+    outright. This is a belt-and-braces retry for when that setting doesn't
+    stick; after an eviction the module is simply gone, so a fresh import
+    rebuilds it. Only KeyErrors naming our own package are retried, so a
+    genuine bug elsewhere still surfaces immediately.
+    """
+    import importlib
+
+    last_error: KeyError | None = None
+    for _ in range(3):
+        try:
+            return importlib.import_module(module_name)
+        except KeyError as exc:
+            key = exc.args[0] if exc.args else None
+            if not (isinstance(key, str) and key.startswith("frontend")):
+                raise
+            last_error = exc
+    raise last_error
+
+
 # ---------------------------------------------------------------------------
 # Backend bootstrap
 # ---------------------------------------------------------------------------
@@ -161,7 +191,7 @@ if (
     not st.session_state.access_token
     and "code" in st.query_params
 ):
-    from frontend.services import supabase_client
+    supabase_client = _import_frontend("frontend.services.supabase_client")
     result = supabase_client.exchange_code_for_session(st.query_params["code"])
 
     #Always clear the ?code= param so a refresh doesn't try to re-exchange.
@@ -213,7 +243,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 👤 Account")
 
-    from frontend.services import supabase_client
+    supabase_client = _import_frontend("frontend.services.supabase_client")
 
     if st.session_state.access_token:
         # Signed-in state: show email + sign-out button.
@@ -319,20 +349,20 @@ if not _backend_ready():
 # Main content area - render based on current view
 if st.session_state.current_view == 'landing':
     # Import and render landing page
-    from frontend.views import landing
+    landing = _import_frontend("frontend.views.landing")
     landing.render()
 
 elif st.session_state.current_view == 'scorer':
     # Import and render scorer page
-    from frontend.views import scorer
+    scorer = _import_frontend("frontend.views.scorer")
     scorer.render()
 
 elif st.session_state.current_view == 'history':
     # Import and render history page
-    from frontend.views import history
+    history = _import_frontend("frontend.views.history")
     history.render()
 
 elif st.session_state.current_view == 'resources':
     # Import and render resources page
-    from frontend.views import resources
+    resources = _import_frontend("frontend.views.resources")
     resources.render()

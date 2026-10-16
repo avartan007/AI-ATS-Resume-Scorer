@@ -10,6 +10,13 @@ maxUploadSize = 10
 enableXsrfProtection = false
 enableCORS = false
 headless = true
+# Disable the source-file watcher. Each browser session gets its own watcher,
+# but sys.modules is process-global, so when a file-change event queues an
+# eviction, one session's script thread pops our modules while another session
+# is mid-import — surfacing as a confusing `KeyError: 'frontend'` from
+# importlib. The container is read-only and redeploys come from git, so hot
+# reload buys nothing here.
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false

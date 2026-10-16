@@ -382,6 +382,8 @@ The folder must be a **sentence-transformers** layout (`modules.json`, `config_s
 | Analysis returns 500 `GROQ_API_KEY environment variable not set` | Add `GROQ_API_KEY` to the **root** `.env`, restart backend |
 | `/generate-pdf` 500 | `pip install weasyprint` + system libs (see below) |
 | Frontend can't reach backend | Set `backend.url` in `frontend/.streamlit/secrets.toml` if not on port 8000 |
+| `KeyError: 'frontend'` / `KeyError: 'frontend.services'` from importlib on Streamlit Cloud | Streamlit's source-file watcher evicts modules from the process-global `sys.modules`, and each session's script thread flushes those evictions independently — so one session can pop a module while another is importing it. Keep `fileWatcherType = "none"` in `.streamlit/config.toml` (already set); redeploys come from git, so hot reload is unnecessary |
+| Google sign-in: `code challenge does not match previously saved code verifier` | `google_oauth_url()` is regenerating the PKCE verifier on every rerun and overwriting the previous one. Generate the URL once and cache it in `st.session_state` (see `frontend/streamlit_app.py`) |
 | `python-magic` import fails on macOS | `brew install libmagic` |
 
 **WeasyPrint system libs (only needed for PDF export):**
