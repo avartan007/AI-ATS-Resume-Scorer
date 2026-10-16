@@ -215,12 +215,8 @@ No — and that's intentional. Weights are not stored in git. Instead:
    ```
    frontend/streamlit_app.py
    ```
-3. Under **Advanced settings**, set:
-   - **Python version: 3.12** — this one matters. PyTorch only publishes
-     CPU-only Linux wheels up to Python 3.13, so on 3.14 pip falls back to
-     PyPI's CUDA build, whose ~3 GB of NVIDIA libraries get the app
-     OOM-killed inside Streamlit Cloud's ~1 GB container.
-   - **Secrets** (this becomes `.streamlit/secrets.toml`, which is git-ignored).
+3. Under **Advanced settings** → *Secrets*, paste the following. This becomes
+   `.streamlit/secrets.toml`, which is git-ignored.
 
    Note the two sections — Streamlit Cloud runs **both** halves of the app in
    one container, so one file has to satisfy two different readers:
@@ -264,21 +260,40 @@ https://<your-app>.streamlit.app
 > whole time. Later visits are instant while the container stays warm.
 >
 > If it fails, the app prints the backend's own log right on the page, so you
-> don't have to dig for it. A `Killed` / out-of-memory line means the Python
-> version is still 3.14 — set it to 3.12 and redeploy.
+> don't have to dig for it.
 
-### 3. Splitting the backend out later
+### 3. Splitting the backend out (Render / Railway / Fly.io)
 
-If you outgrow the single-process setup (cold starts, memory), host the API
-separately (Render / Railway / Fly.io) and just point the frontend at it:
+If you outgrow the single-process setup — cold starts, or the ~1 GB container
+running out of memory while loading the models — host the API separately and
+point the frontend at it.
+
+**Deploy the backend on Render** as a Web Service from the same repo:
+
+| Setting  | Value |
+| -------- | ----- |
+| Runtime  | Python |
+| Build    | `pip install -r requirements.txt` |
+| Start    | `uvicorn backend.main:app --host 0.0.0.1 --port $PORT` |
+
+Render assigns the port, so the start command must read `$PORT` — binding to a
+fixed `8000` will make the service fail its health check. Add the same
+`GROQ_*` / `SUPABASE_*` values as environment variables in the service's
+**Environment** tab; the backend reads them straight from `os.getenv`.
+
+Then tell the frontend to stop spawning its own backend:
 
 ```toml
 # .streamlit/secrets.toml on Streamlit Cloud
 [backend]
-url = "https://your-api.example.com"
+url = "https://your-api.onrender.com"
 ```
 
-`backend.url` disables the in-process backend entirely.
+`backend.url` disables the in-process backend entirely. Add that same Render
+URL to Supabase → Authentication → Redirect URLs if you use OAuth.
+
+> Render's free tier also sleeps when idle, so the first request after a quiet
+> spell takes ~30 s while the instance restarts and reloads its models.
 
 ---
 

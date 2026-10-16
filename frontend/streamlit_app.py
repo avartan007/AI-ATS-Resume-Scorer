@@ -298,8 +298,9 @@ if not _backend_ready():
         else:
             st.error(
                 "The backend failed to start. The last lines of its log are below — "
-                "if you see an out-of-memory (Killed) error, drop the Python version "
-                "to 3.12 in the app's advanced settings so a CPU-only torch is used."
+                "if you see an out-of-memory (Killed) error, the container is too "
+                "small to hold the AI models; see the 'Splitting the backend out' "
+                "section of the README."
             )
             st.code(_backend_log_tail(), language="log")
             st.stop()

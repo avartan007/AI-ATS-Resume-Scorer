@@ -16,12 +16,10 @@ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0
 
 # torch from PyPI on Linux pulls in the full CUDA stack (~3 GB), which the
 # ~1 GB CPU-only Streamlit Cloud container cannot hold — the backend gets
-# OOM-killed while loading its models. Use PyTorch's CPU build there instead.
-# Those wheels stop at 2.6.0 and only exist for Python <= 3.13, so set the
-# app's Python version to 3.12 on Streamlit Cloud. On macOS/Windows the normal
-# PyPI build is already CPU-only.
+# OOM-killed while loading its models. Pin PyTorch's CPU build there instead.
+# macOS/Windows wheels are already CPU-only, so leave them unpinned.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.6.0+cpu ; sys_platform == "linux"
+torch==2.14.1+cpu ; sys_platform == "linux"
 torch ; sys_platform != "linux"
 
 # Pinned to the versions this app is tested against, so the deployed container
