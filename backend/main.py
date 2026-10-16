@@ -1,4 +1,5 @@
 import logging
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,33 @@ from backend.api.routes import router
 
 logger=logging.getLogger('ats_resume_scorer')
 
+# uvicorn only wires up its own loggers and nothing here ever calls
+# logging.basicConfig(), so every logger.info() below landed on a logger with
+# no handlers — logging.lastResort discards anything below WARNING. In the
+# Render logs that turned a cold start into 14 silent minutes between "Waiting
+# for application startup." and the port-scan timeout, with no way to tell a
+# hang from a slow load. Attach our own handler; uvicorn's dictConfig sets
+# disable_existing_loggers=False, so it is left alone.
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+logger.propagate = False
+
+
+def _rss_mb() -> float:
+    """Peak resident memory so far, in MB. Linux reports KB, macOS bytes."""
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        return -1.0
+    if sys.platform == 'darwin':
+        return peak / (1024.0 * 1024.0)
+    return peak / 1024.0
+
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     logger.info('Starting ATS Resume Analyzer API...')
@@ -23,18 +51,18 @@ async def lifespan(app:FastAPI):
     import spacy
     try:
         app.state.nlp = spacy.load(SPACY_MODEL_PRIMARY)
-        logger.info(f'Loaded {SPACY_MODEL_PRIMARY}')
+        logger.info(f'Loaded {SPACY_MODEL_PRIMARY} (RSS {_rss_mb():.0f} MB)')
     except OSError:
         logger.warning(f'{SPACY_MODEL_PRIMARY} not found — falling back to {SPACY_MODEL_SECONDARY}')
         app.state.nlp = spacy.load(SPACY_MODEL_SECONDARY)
-        logger.info(f'Loaded {SPACY_MODEL_SECONDARY} (fallback)')
+        logger.info(f'Loaded {SPACY_MODEL_SECONDARY} (fallback, RSS {_rss_mb():.0f} MB)')
 
     logger.info(f'Loading SentenceTransformer: {SENTENCE_TRANSFORMER_MODEL}')
     from sentence_transformers import SentenceTransformer
     app.state.embedder = SentenceTransformer(SENTENCE_TRANSFORMER_MODEL)
-    logger.info(f'Loaded {SENTENCE_TRANSFORMER_MODEL}')
+    logger.info(f'Loaded {SENTENCE_TRANSFORMER_MODEL} (RSS {_rss_mb():.0f} MB)')
 
-    logger.info('All models loaded. API is ready to serve requests.')
+    logger.info(f'All models loaded. API is ready to serve requests. (peak RSS {_rss_mb():.0f} MB)')
 
     yield
 
