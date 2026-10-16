@@ -252,9 +252,6 @@ with st.sidebar:
             supabase_client.sign_out()
             for k in ("access_token", "refresh_token", "user_id", "user_email"):
                 st.session_state[k] = None
-            # Drop the cached OAuth URL so the next attempt mints a fresh
-            # code_verifier instead of reusing a spent one.
-            st.session_state.pop("oauth_url", None)
             st.rerun()
     else:
         # Signed-out state: tabs for sign-in vs sign-up + Google OAuth button.
@@ -306,15 +303,11 @@ with st.sidebar:
         st.markdown("<div style='text-align:center; margin: 8px 0; color:#94a3b8;'>or</div>",
                     unsafe_allow_html=True)
 
-        # Generate this ONCE per session. Every call mints a new PKCE
-        # code_verifier and overwrites the one held by the shared Supabase
-        # client, so regenerating on each rerun invalidates the code_challenge
-        # baked into the link the user is about to click — the callback then
-        # fails with "code challenge does not match previously saved code
-        # verifier".
-        if "oauth_url" not in st.session_state or not st.session_state.oauth_url:
-            st.session_state.oauth_url = supabase_client.google_oauth_url()
-        oauth = st.session_state.oauth_url
+        # Cached per process, not per session: every session shares one Supabase
+        # client, hence one PKCE verifier slot. Minting a URL here would clobber
+        # the challenge of a link another session is already showing. See the
+        # PKCE note in frontend/services/supabase_client.py.
+        oauth = supabase_client.google_oauth_url()
         if "error" in oauth:
             st.caption(f"Google sign-in unavailable: {oauth['error']}")
         else:

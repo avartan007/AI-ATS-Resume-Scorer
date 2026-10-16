@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -73,6 +74,37 @@ def _missing_config() -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# PKCE state
+# ---------------------------------------------------------------------------
+# supabase-py holds exactly ONE PKCE code_verifier, in the auth client's
+# in-memory storage under '<storage_key>-code-verifier', and writes a brand new
+# one every time sign_in_with_oauth() is called (_get_url_for_provider). The
+# client below is a process-wide singleton, so that slot is shared by every
+# Streamlit session: if two sessions each build a sign-in URL, the second
+# silently clobbers the first, and whichever user then comes back from Google
+# gets "code challenge does not match previously saved code verifier" — even
+# though they only ever clicked one button.
+#
+# So build the URL once per process, remember which verifier it belongs to, and
+# hand that exact verifier to the exchange. The lock keeps this single-flight
+# when several sessions render the sign-in page simultaneously.
+_oauth_attempt: Dict[str, str] | None = None
+_oauth_lock = threading.Lock()
+
+
+def _verifier_key(client: Client) -> str:
+    """Storage key supabase-py uses for the PKCE code_verifier."""
+    return f'{client.auth._storage_key}-code-verifier'
+
+
+def clear_oauth_attempt() -> None:
+    """Forget the current sign-in URL so the next call mints a fresh one."""
+    global _oauth_attempt
+    with _oauth_lock:
+        _oauth_attempt = None
+
+
 @st.cache_resource
 def get_client() -> Client | None:
     """Cached singleton — preserves PKCE state across Streamlit reruns."""
@@ -122,27 +154,35 @@ def sign_up_with_password(email: str, password: str) -> Dict[str, Any]:
         return {'error': _humanize(exc)}
 
 
-def google_oauth_url() -> Dict[str, Any]:
+def google_oauth_url(force_refresh: bool = False) -> Dict[str, Any]:
     """Build the Google sign-in URL.
 
-    ⚠️ Each call mints a new PKCE code_verifier and overwrites the one held by
-    the shared Supabase client, so callers must generate this **once** and
-    reuse it — regenerating on every Streamlit rerun invalidates the
-    code_challenge embedded in the link and the callback then fails with
-    "code challenge does not match previously saved code verifier".
+    Cached per process, not per session — see the note above the PKCE state
+    block. Rebuilding the URL anywhere mints a new code_verifier and breaks the
+    challenge embedded in the link the user is about to click, so the URL is
+    reused until something consumes or invalidates it.
     """
     err = _missing_config()
     if err:
         return {'error': err}
-    try:
-        resp = get_client().auth.sign_in_with_oauth({
-            'provider': 'google',
-            'options': {'redirect_to': _oauth_redirect_url()},
-        })
-        return {'url': resp.url}
-    except Exception as exc:
-        logger.warning(f'oauth url generation failed: {exc}')
-        return {'error': _humanize(exc)}
+
+    global _oauth_attempt
+    with _oauth_lock:
+        if _oauth_attempt is not None and not force_refresh:
+            return {'url': _oauth_attempt['url']}
+        try:
+            client = get_client()
+            resp = client.auth.sign_in_with_oauth({
+                'provider': 'google',
+                'options': {'redirect_to': _oauth_redirect_url()},
+            })
+            # Read back the verifier the library just generated for this URL.
+            verifier = client.auth._storage.get_item(_verifier_key(client)) or ''
+            _oauth_attempt = {'url': resp.url, 'verifier': verifier}
+            return {'url': resp.url}
+        except Exception as exc:
+            logger.warning(f'oauth url generation failed: {exc}')
+            return {'error': _humanize(exc)}
 
 
 def exchange_code_for_session(auth_code: str) -> Dict[str, Any]:
@@ -151,19 +191,33 @@ def exchange_code_for_session(auth_code: str) -> Dict[str, Any]:
     if err:
         return {'error': err}
     client = get_client()
+
+    # Exchange against the verifier that belongs to the URL we handed out,
+    # rather than whatever happens to be in the library's shared storage.
+    with _oauth_lock:
+        verifier = (_oauth_attempt or {}).get('verifier', '')
+    if not verifier:
+        verifier = client.auth._storage.get_item(_verifier_key(client)) or ''
+
     try:
-        storage_key = f'{client.auth._storage_key}-code-verifier'
-        code_verifier = client.auth._storage.get_item(storage_key) or ''
         resp = client.auth.exchange_code_for_session({
             'auth_code': auth_code,
-            'code_verifier': code_verifier,
+            'code_verifier': verifier,
             'redirect_to': _oauth_redirect_url(),
         })
         if not resp.session or not resp.user:
+            clear_oauth_attempt()
             return {'error': 'OAuth exchange returned no session'}
+        # The verifier is spent and the auth code consumed, so start clean —
+        # the next sign-in must get a fresh challenge.
+        clear_oauth_attempt()
         return _session_dict(resp.session, resp.user)
     except Exception as exc:
         logger.warning(f'exchange_code_for_session failed: {exc}')
+        # Drop the attempt so the sign-in button re-mints a URL. A failure is
+        # most often a stale link (e.g. one issued before a redeploy) and the
+        # user just needs to click the freshly rendered button.
+        clear_oauth_attempt()
         return {'error': _humanize(exc)}
 
 
@@ -174,15 +228,23 @@ def sign_out() -> None:
         get_client().auth.sign_out()
     except Exception as exc:
         logger.warning(f'sign_out failed: {exc}')
+    finally:
+        clear_oauth_attempt()
 
 
 def _humanize(exc: Exception) -> str:
     msg = str(exc)
+    low = msg.lower()
     # supabase errors arrive as "<status>: {json blob}" — surface the human bit
-    if 'invalid_grant' in msg.lower() or 'invalid login' in msg.lower():
+    if 'code challenge does not match' in low or 'code verifier should be non-empty' in low:
+        # Almost always a link issued before a redeploy/restart, or one that was
+        # superseded. The button below has already been re-minted.
+        return ('That Google sign-in link is no longer valid — click '
+                '"Continue with Google" again to start a fresh sign-in.')
+    if 'invalid_grant' in low or 'invalid login' in low:
         return 'Wrong email or password'
-    if 'user already registered' in msg.lower() or 'already been registered' in msg.lower():
+    if 'user already registered' in low or 'already been registered' in low:
         return 'An account with this email already exists — try signing in'
-    if 'password should be at least' in msg.lower():
+    if 'password should be at least' in low:
         return 'Password too short (Supabase default is 6 characters)'
     return msg

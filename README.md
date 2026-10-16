@@ -383,7 +383,7 @@ The folder must be a **sentence-transformers** layout (`modules.json`, `config_s
 | `/generate-pdf` 500 | `pip install weasyprint` + system libs (see below) |
 | Frontend can't reach backend | Set `backend.url` in `frontend/.streamlit/secrets.toml` if not on port 8000 |
 | `KeyError: 'frontend'` / `KeyError: 'frontend.services'` from importlib on Streamlit Cloud | Streamlit's source-file watcher evicts modules from the process-global `sys.modules`, and each session's script thread flushes those evictions independently — so one session can pop a module while another is importing it. Keep `fileWatcherType = "none"` in `.streamlit/config.toml` (already set); redeploys come from git, so hot reload is unnecessary |
-| Google sign-in: `code challenge does not match previously saved code verifier` | `google_oauth_url()` is regenerating the PKCE verifier on every rerun and overwriting the previous one. Generate the URL once and cache it in `st.session_state` (see `frontend/streamlit_app.py`) |
+| Google sign-in: `code challenge does not match previously saved code verifier` | supabase-py keeps a single PKCE verifier in the process-wide client, and rewrites it on every `sign_in_with_oauth()`. Two sessions rendering the sign-in page therefore clobber each other. `google_oauth_url()` builds the URL once per process and `exchange_code_for_session()` passes that exact verifier back (see the PKCE note in `frontend/services/supabase_client.py`). The message now also tells the user to click the button again, which mints a fresh link |
 | `python-magic` import fails on macOS | `brew install libmagic` |
 
 **WeasyPrint system libs (only needed for PDF export):**
