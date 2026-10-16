@@ -13,9 +13,21 @@ spacy
 # `pip install -r requirements.txt` is all a fresh host (incl. Streamlit Cloud)
 # needs.
 https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl
-sentence-transformers
-torch
-transformers
+
+# torch from PyPI on Linux pulls in the full CUDA stack (~3 GB), which the
+# ~1 GB CPU-only Streamlit Cloud container cannot hold — the backend gets
+# OOM-killed while loading its models. Use PyTorch's CPU build there instead.
+# Those wheels stop at 2.6.0 and only exist for Python <= 3.13, so set the
+# app's Python version to 3.12 on Streamlit Cloud. On macOS/Windows the normal
+# PyPI build is already CPU-only.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu ; sys_platform == "linux"
+torch ; sys_platform != "linux"
+
+# Pinned to the versions this app is tested against, so the deployed container
+# behaves the same as local dev.
+transformers==5.16.1
+sentence-transformers==6.0.1
 
 # ---- File parsing ----
 PyPDF2

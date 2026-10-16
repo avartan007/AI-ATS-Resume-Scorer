@@ -215,8 +215,12 @@ No — and that's intentional. Weights are not stored in git. Instead:
    ```
    frontend/streamlit_app.py
    ```
-3. Under **Advanced settings** → *Secrets*, paste the following. This becomes
-   `.streamlit/secrets.toml`, which is git-ignored.
+3. Under **Advanced settings**, set:
+   - **Python version: 3.12** — this one matters. PyTorch only publishes
+     CPU-only Linux wheels up to Python 3.13, so on 3.14 pip falls back to
+     PyPI's CUDA build, whose ~3 GB of NVIDIA libraries get the app
+     OOM-killed inside Streamlit Cloud's ~1 GB container.
+   - **Secrets** (this becomes `.streamlit/secrets.toml`, which is git-ignored).
 
    Note the two sections — Streamlit Cloud runs **both** halves of the app in
    one container, so one file has to satisfy two different readers:
@@ -255,8 +259,13 @@ Add the deployed URL to Supabase → **Authentication → Redirect URLs**:
 https://<your-app>.streamlit.app
 ```
 
-> First load takes ~60 s while the models download and warm up; the UI shows a
-> progress spinner, then loads normally.
+> The first load takes a couple of minutes: the embedding model is fetched
+> from Hugging Face and the NLP pipeline is loaded, with a spinner shown the
+> whole time. Later visits are instant while the container stays warm.
+>
+> If it fails, the app prints the backend's own log right on the page, so you
+> don't have to dig for it. A `Killed` / out-of-memory line means the Python
+> version is still 3.14 — set it to 3.12 and redeploy.
 
 ### 3. Splitting the backend out later
 

@@ -76,6 +76,31 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+# The child's output goes to a file (not DEVNULL) so a failed boot can be
+# surfaced in the UI and in the Streamlit Cloud logs instead of failing silently.
+BACKEND_LOG = os.path.join(tempfile.gettempdir(), f"ats-backend-{BACKEND_PORT}.log")
+
+
+def _backend_log_tail(lines: int = 40) -> str:
+    """Last meaningful lines of the backend log.
+
+    Streamlit's own "missing ScriptRunContext" chatter is dropped so an actual
+    traceback stays readable.
+    """
+    noise = (
+        "missing ScriptRunContext",
+        "Session state does not function when running a script",
+        "to view a Streamlit app on a browser",
+    )
+    try:
+        with open(BACKEND_LOG, "r", errors="replace") as fh:
+            kept = [ln for ln in fh.readlines() if not any(n in ln for n in noise)]
+    except OSError:
+        return "(no backend log captured)"
+    tail = [ln for ln in kept[-lines:] if ln.strip()]
+    return "".join(tail).strip() or "(backend produced no output)"
+
+
 def _ensure_backend() -> None:
     """Start the FastAPI backend in-process if nothing is listening yet.
 
@@ -94,13 +119,15 @@ def _ensure_backend() -> None:
         except (OSError, ValueError):
             pass
 
+    log = open(BACKEND_LOG, "ab")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.main:app",
          "--host", "127.0.0.1", "--port", str(BACKEND_PORT)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    log.close()  # the child keeps its own copy of the descriptor
     with open(lock, "w") as fh:
         fh.write(str(proc.pid))
 
@@ -256,19 +283,25 @@ with st.sidebar:
                 use_container_width=True,
             )
 
-# Wait for the backend if it was just spawned (cold start loads AI models,
-# which takes ~60s). On Streamlit Cloud this is the only process, so the
-# backend is the uvicorn child we kicked off above.
+# Wait for the backend if it was just spawned (cold start downloads the
+# embedding model and loads the NLP pipeline). On Streamlit Cloud this is the
+# only process, so the backend is the uvicorn child we kicked off above.
 if not _backend_ready():
     with st.spinner(
-        "Starting the scoring engine — first launch takes ~60s while the AI models load…"
+        "Starting the scoring engine — the first launch downloads the AI models, "
+        "which takes a couple of minutes…"
     ):
-        for _ in range(90):
+        for _ in range(120):
             if _backend_ready():
                 break
             time.sleep(2)
         else:
-            st.error("The backend failed to start. Check the Streamlit Cloud logs.")
+            st.error(
+                "The backend failed to start. The last lines of its log are below — "
+                "if you see an out-of-memory (Killed) error, drop the Python version "
+                "to 3.12 in the app's advanced settings so a CPU-only torch is used."
+            )
+            st.code(_backend_log_tail(), language="log")
             st.stop()
 
 # Main content area - render based on current view
