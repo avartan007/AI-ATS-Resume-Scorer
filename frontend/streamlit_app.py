@@ -85,6 +85,12 @@ def _resolve_backend():
 
 BACKEND_URL, BACKEND_PORT = _resolve_backend()
 
+# Cold start downloads the embedding model and loads the NLP pipeline, so the
+# first launch can take several minutes. Generous by default (and overridable
+# for slow containers) — reporting a dead backend after too short a wait is
+# worse than making the user wait a little longer.
+BACKEND_STARTUP_TIMEOUT = int(os.getenv("BACKEND_STARTUP_TIMEOUT", "360"))
+
 
 def _port_is_taken(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -149,6 +155,9 @@ def _ensure_backend() -> None:
         except (OSError, ValueError):
             pass
 
+    # cwd must be the repo root: the child does NOT inherit this file's
+    # sys.path fix above, so `backend.main` only resolves if uvicorn starts in
+    # the directory that contains the `backend` package.
     log = open(BACKEND_LOG, "ab")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.main:app",
@@ -156,6 +165,7 @@ def _ensure_backend() -> None:
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        cwd=str(REPO_ROOT),
     )
     log.close()  # the child keeps its own copy of the descriptor
     with open(lock, "w") as fh:
@@ -325,19 +335,39 @@ if not _backend_ready():
         "Starting the scoring engine — the first launch downloads the AI models, "
         "which takes a couple of minutes…"
     ):
-        for _ in range(120):
+        status = st.empty()
+        started = time.time()
+        while True:
             if _backend_ready():
                 break
+            waited = time.time() - started
+            if waited >= BACKEND_STARTUP_TIMEOUT:
+                status.empty()
+                if BACKEND_PORT is None:
+                    # Nothing was spawned: an external backend is configured.
+                    st.error(
+                        f"**No backend is answering at** `{BACKEND_URL}`.\n\n"
+                        "This app is pointed at an *external* backend — a `[backend] "
+                        "url` secret or a `BACKEND_URL` env var — rather than the one "
+                        "bundled with it, and that server is not responding. This is "
+                        "usually a Render service that is still deploying or has "
+                        "crashed; deploy it (see the Render section of the README), "
+                        "or remove the `[backend]` secret so the app runs its own "
+                        "backend inside this container."
+                    )
+                    st.stop()
+                st.error(
+                    f"The backend process never became healthy after {int(waited)}s. "
+                    "Its last lines are below. On the free-tier container this is "
+                    "usually out-of-memory — a `Killed` line while loading the AI "
+                    "models — see the 'Splitting the backend out' section of the "
+                    "README. Paste the log below when reporting it."
+                )
+                st.code(_backend_log_tail(), language="log")
+                st.stop()
+            status.caption(f"Warming up… {int(waited)}s elapsed")
             time.sleep(2)
-        else:
-            st.error(
-                "The backend failed to start. The last lines of its log are below — "
-                "if you see an out-of-memory (Killed) error, the container is too "
-                "small to hold the AI models; see the 'Splitting the backend out' "
-                "section of the README."
-            )
-            st.code(_backend_log_tail(), language="log")
-            st.stop()
+        status.empty()
 
 # Main content area - render based on current view
 if st.session_state.current_view == 'landing':
